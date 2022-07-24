@@ -32,12 +32,16 @@ srun --mpi=pmi2 -p v100_nodes -n 16 --gres=gpu:8 --ntasks-per-node=8  --job-name
 
 # Accuracy 
 
-For multi-gpu:
+For multi-gpu (lr=0.01):
 ```
 Epoch: [200]/[200], test accuracy: 77.040 %,  the best accuracy: 77.760 %
 ```
 
-For single gpu:
+For single gpu (lr=0.01):
 ```
 Epoch: [200]/[200], test accuracy: 79.030 %,  the best accuracy: 80.650 %
 ```
+
+> Note:
+> 1) If we fix args.seed, then all multi-gpu programs will produce the same results.
+> 2) In comparison to a single gpu program, the batch size of a multi-gpu program increases, so the learning rate should also increase.
