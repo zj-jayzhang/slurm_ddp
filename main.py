@@ -34,7 +34,6 @@ parser.add_argument('--port', type=str, default='40', help='port, 0~65535')
 
 args = parser.parse_args()
 
-
 def setup_distributed(backend="nccl", port=None):
     """
     Initialize distributed training environment.
@@ -46,8 +45,8 @@ def setup_distributed(backend="nccl", port=None):
 
     rank = int(os.environ["SLURM_PROCID"])
     world_size = int(os.environ["SLURM_NTASKS"])
-    node_list = os.environ["SLURM_NODELIST"]
-    os.environ["MASTER_PORT"] = args.port
+    os.environ["MASTER_PORT"] = '26666'
+    os.environ['MASTER_ADDR'] = 'localhost'
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["LOCAL_RANK"] = str(rank % num_gpus)
     os.environ["RANK"] = str(rank)
