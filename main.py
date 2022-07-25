@@ -94,7 +94,8 @@ def get_dataset():
         batch_size=args.batch_size,
         num_workers=4,
         pin_memory=True,
-        sampler=train_sampler
+        sampler=train_sampler,
+        shuffle=(train_sampler is None)
     )
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
