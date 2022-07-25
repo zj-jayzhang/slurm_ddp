@@ -39,22 +39,15 @@ def setup_distributed(backend="nccl", port=None):
     """
     Initialize distributed training environment.
     support both slurm and torch.distributed.launch
+    import torch.distributed as dist
+    
     """
     num_gpus = torch.cuda.device_count()
 
     rank = int(os.environ["SLURM_PROCID"])
     world_size = int(os.environ["SLURM_NTASKS"])
     node_list = os.environ["SLURM_NODELIST"]
-    addr = subprocess.getoutput(f"scontrol show hostname {node_list} | head -n1")
-    # specify master port
-    if port is not None:
-        os.environ["MASTER_PORT"] = str(port)
-    elif "MASTER_PORT" in os.environ:
-        pass  # use MASTER_PORT in the environment variable
-    else:
-        os.environ["MASTER_PORT"] = args.port
-    if "MASTER_ADDR" not in os.environ:
-        os.environ["MASTER_ADDR"] = addr
+    os.environ["MASTER_PORT"] = args.port
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["LOCAL_RANK"] = str(rank % num_gpus)
     os.environ["RANK"] = str(rank)
