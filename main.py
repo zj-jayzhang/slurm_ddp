@@ -2,27 +2,26 @@ import argparse
 import datetime
 import os
 import random
-import subprocess
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torchvision
-import torchvision.transforms as transforms
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torchvision import datasets, transforms
 import torch.nn.functional as F
 import pdb
 import numpy as np
 import torch.backends.cudnn as cudnn
+import warnings
 
+warnings.filterwarnings('ignore')
 
 starttime = datetime.datetime.now()
 
 parser = argparse.ArgumentParser(description='')
 # Training Configuration
-parser.add_argument('--debug', type=int, default=0,
-                    help='single gpu for code debug')
+parser.add_argument('--type', type=int, default=0,
+                    help='0 for single gpu, 1 for torch.distributed.launch, 2 for slurm.')
 parser.add_argument('--seed', type=int, default=2022,
                     help='random seed')
 parser.add_argument('--epoch', type=int, default=40)
@@ -31,6 +30,8 @@ parser.add_argument('--batch_size', type=int, default=256,
                     help='total number of training iterations')
 parser.add_argument('--data_dir', type=str, default='~/../share_data/zhangjie/')
 parser.add_argument('--port', type=str, default='40', help='port, 0~65535')
+parser.add_argument('--eval', type=int, default=0, help='test the performance of the pretrained model')
+
 
 args = parser.parse_args()
 
@@ -42,14 +43,18 @@ def setup_distributed(backend="nccl", port=None):
     
     """
     num_gpus = torch.cuda.device_count()
+    if args.type == 2:
+        rank = int(os.environ["SLURM_PROCID"])
+        world_size = int(os.environ["SLURM_NTASKS"])
+        os.environ["MASTER_PORT"] = '36666'
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ["WORLD_SIZE"] = str(world_size)
+        os.environ["LOCAL_RANK"] = str(rank % num_gpus)
+        os.environ["RANK"] = str(rank)
+    elif args.type == 1:
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
 
-    rank = int(os.environ["SLURM_PROCID"])
-    world_size = int(os.environ["SLURM_NTASKS"])
-    os.environ["MASTER_PORT"] = '26666'
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ["WORLD_SIZE"] = str(world_size)
-    os.environ["LOCAL_RANK"] = str(rank % num_gpus)
-    os.environ["RANK"] = str(rank)
     torch.cuda.set_device(rank % num_gpus)
     dist.init_process_group(
         backend=backend,
@@ -77,7 +82,7 @@ def get_dataset():
                                             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
                                         ]))
     train_sampler, test_sampler = None, None
-    if args.debug == 0:
+    if args.type != 0:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
         test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset)
 
@@ -133,22 +138,31 @@ if __name__ == "__main__":
     setup_seed(args.seed)
     rank = 0
     local_rank = args.gpu
-    if args.debug == 0:
+    if args.type == 0:
+        print("Single gpu running >>> ")
+    else:
         setup_distributed()
         rank = int(os.environ["RANK"])
         local_rank = int(os.environ["LOCAL_RANK"])
+
         print(f"[init] == local rank: {local_rank}, global rank: {rank} ==")
-    else:
-        print("Single gpu for debug >>> ")
+
     # 1. define network
     net = torchvision.models.resnet18(pretrained=False, num_classes=10)
     net = net.cuda(local_rank)
     # DistributedDataParallel
-    if args.debug == 0:
-        net = DDP(net, device_ids=[local_rank], output_device=local_rank)
+    if args.type != 0:
+        net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[local_rank], output_device=local_rank)
 
     # 2. define dataloader
     train_loader, test_loader = get_dataset()
+    if args.eval == 1:
+        checkpoint = torch.load('ckpt.pth', map_location="cpu")
+        net.module.load_state_dict(checkpoint)
+        test_acc, _ = test(net, test_loader)
+        if rank == 0:   print("Test accuracy: {}".format(test_acc))
+        os._exit(0) 
+
     # 3. define loss and optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(net.parameters(), lr=0.01, momentum=0.9, weight_decay=0.0001, nesterov=True, )
@@ -162,7 +176,7 @@ if __name__ == "__main__":
     for ep in range(1, args.epoch + 1):
         train_loss = correct = total = 0
         # set sampler
-        if args.debug == 0:
+        if args.type != 0:
             train_loader.sampler.set_epoch(ep)
 
         for idx, (inputs, targets) in enumerate(train_loader):
@@ -185,7 +199,9 @@ if __name__ == "__main__":
                     ep + 1, args.epoch,
                     100.0 * correct / total, train_loss / total))
         acc, loss = test(net, test_loader)
-        best_acc = max(best_acc, acc)
+        if acc > best_acc:
+            best_acc = acc
+            if rank == 0: torch.save(net.module.state_dict(), 'ckpt.pth')
         if rank == 0:
             print("Epoch: [{}]/[{}], test accuracy: {:.3f} %,  the best accuracy: {:.3f} %".format(ep + 1,
                                                                                                    args.epoch, acc,
@@ -196,33 +212,21 @@ if __name__ == "__main__":
         print("Total running time: {} mins!".format(res))
 
 """
-usage: debug = 0 for slurm, 1 for single gpu
+usage: 0 for single gpu, 1 for torch.distributed.launch, 2 for slurm.
 
+# torch.distributed.launch
+torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=22222 ddp.py --epoch=100 --type=1 --data_dir=data/
 
+# eval
+torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=22222 ddp.py --type=1 --data_dir=data/ --eval=1
 
-1) slurm, 1 gpu for debug, slurm will randomly seletc one node, no need to set the gpu
-srun --mpi=pmi2 -p stc1_v100_16g -n 1 --gres=gpu:1 --ntasks-per-node=1  --job-name=test --kill-on-bad-exit=1 -w SH-IDC1-10-5-37-69 python slurm_train.py --p
-ort=29500 --epoch=200 --debug=1 | tee single.log 
+# slurm, 4 gpu on 1 node
 
-Epoch: [200]/[200], test accuracy: 79.030 %,  the best accuracy: 80.650 %
-Total running time: 24.733333333333334 mins!
+srun --mpi=pmi2 -p stc1_v100_32g -n 4 --gres=gpu:4 --ntasks-per-node=4  --job-name=test --kill-on-bad-exit=1 python slurm_test.py --epoch=200 --type=2
 
-2) slurm, 4 gpu 
-srun --mpi=pmi2 -p stc1_v100_16g -n 4 --gres=gpu:4 --ntasks-per-node=4  --job-name=test --kill-on-bad-exit=1 -x SH-IDC1-10-5-36-96 python -u slurm_train.py --port=29499 --epoch=200
+# slurm, 16 gpu on two nodes (8 V100 for each node)
 
-Epoch: [200]/[200], test accuracy: 78.040 %,  the best accuracy: 78.040 %
-Total running time: 10.383333333333333 mins!
+srun --mpi=pmi2 -p stc1_v100_32g -n 16 --gres=gpu:8 --ntasks-per-node=8  --job-name=test --kill-on-bad-exit=1 python slurm_test.py --epoch=200 --type=2
 
-3) slurm, 8 gpu
-srun --mpi=pmi2 -p stc1_v100_16g -n 8 --gres=gpu:8 --ntasks-per-node=8  --job-name=test --kill-on-bad-exit=1 -x SH-IDC1-10-5-36-96 python -u slurm_train.py --port=29498 --epoch=200
-
-Epoch: [200]/[200], test accuracy: 76.480 %,  the best accuracy: 77.120 %
-Total running time: 7.716666666666667 mins!
-
-4) slurm, 16 gpu on two nodes 
-srun --mpi=pmi2 -p stc1_v100_16g -n 16 --gres=gpu:8 --ntasks-per-node=8  --job-name=test --kill-on-bad-exit=1 -x SH-IDC1-10-5-36-96 python -u slurm_train.py --port=29499 --epoch=200
-
-Epoch: [200]/[200], test accuracy: 74.400 %,  the best accuracy: 78.400 %
-Total running time: 6.2 mins!
 
 """
