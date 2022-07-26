@@ -6,18 +6,25 @@ This is an example of using the Slurm cluster to speed up the Torch model traini
 
 # Slurm Cluster Usage
 
-usage: set args.debug = 0 for slurm, 1 for single gpu
+usage: args.type = 0 for single gpu, 1 for torch.distributed.launch, 2 for slurm.
 
 Here is an example on V100:
 ``` python
-# slurm, 1 gpu for debug, slurm will randomly seletc one node, no need to set the gpu
 
-srun --mpi=pmi2 -p v100_nodes -n 1 --gres=gpu:1 --ntasks-per-node=1  --job-name=test --kill-on-bad-exit=1 python main.py --port=29500 --epoch=200 --debug=1 
 
+# torch.distributed.launch
+torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=22222 ddp.py --epoch=100 --type=1 --data_dir=data/
+
+# eval
+torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=22222 ddp.py --type=1 --data_dir=data/ --eval=1
+
+# slurm, 4 gpu on 1 node
+
+srun --mpi=pmi2 -p stc1_v100_32g -n 4 --gres=gpu:4 --ntasks-per-node=4  --job-name=test --kill-on-bad-exit=1 python slurm_test.py --epoch=200 --type=2
 
 # slurm, 16 gpu on two nodes (8 V100 for each node)
 
-srun --mpi=pmi2 -p v100_nodes -n 16 --gres=gpu:8 --ntasks-per-node=8  --job-name=test --kill-on-bad-exit=1 python main.py --port=29499 --epoch=200
+srun --mpi=pmi2 -p stc1_v100_32g -n 16 --gres=gpu:8 --ntasks-per-node=8  --job-name=test --kill-on-bad-exit=1 python slurm_test.py --epoch=200 --type=2
 
 ```
 
