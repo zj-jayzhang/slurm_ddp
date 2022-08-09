@@ -173,11 +173,14 @@ if __name__ == "__main__":
     # 4. start to train
     net.train()
     best_acc = -1
-    for ep in range(1, args.epoch + 1):
+    # for ep in range(1, args.epoch + 1):
+    ep = 0
+    while True:
         train_loss = correct = total = 0
         # set sampler
         if args.type != 0:
             train_loader.sampler.set_epoch(ep)
+            ep = ep+1
 
         for idx, (inputs, targets) in enumerate(train_loader):
             # pdb.set_trace()
@@ -226,7 +229,7 @@ srun --mpi=pmi2 -p stc1_v100_32g -n 4 --gres=gpu:4 --ntasks-per-node=4  --job-na
 
 # slurm, 16 gpu on two nodes (8 V100 for each node)
 
-srun --mpi=pmi2 -p stc1_v100_32g -n 16 --gres=gpu:8 --ntasks-per-node=8  --job-name=test --kill-on-bad-exit=1 python slurm_test.py --epoch=200 --type=2
+srun --mpi=pmi2 -p stc1_v100_32g -n 16 --gres=gpu:8 --ntasks-per-node=8  --job-name=test --kill-on-bad-exit=1 python slurm_test.py  --type=2
 
 
 """
